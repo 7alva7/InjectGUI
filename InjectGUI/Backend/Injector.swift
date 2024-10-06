@@ -107,7 +107,7 @@ class Injector: ObservableObject {
             if response == .alertFirstButtonReturn {
                 // Continue
             } else if response == .alertSecondButtonReturn {
-                let url = URL(string: "https://qiuchenlyopensource.github.io/Documentaions/setapp%E6%BF%80%E6%B4%BB%E5%BF%85%E8%AF%BB.html")!
+                let url = URL(string: "https://qiuchenlyopensource.github.io/Documentaions/setapp.html")!
                 NSWorkspace.shared.open(url)
                 return
             } else {
@@ -132,6 +132,8 @@ class Injector: ObservableObject {
         guard let injectDetail = injectConfiguration.injectDetail(package: package) else {
             return
         }
+        print("----------------------------")
+        print("[*] Start inject \(package)")
         self.injectDetail = injectDetail
         self.appDetail = appDetail
         self.shouldShowStatusSheet = true
@@ -174,9 +176,35 @@ class Injector: ObservableObject {
 
                     alert.informativeText = String(localized: "\(errorMessage) \n\nPlease check your application integrity and try again.\n\n(Stage: \(stage.description))")
                     alert.alertStyle = .critical
+                    // 加一个 Open an issue 按钮，点击后打开 GitHub Issues
                     alert.addButton(withTitle: String(localized: "OK"))
-                    alert.runModal()
+                    alert.addButton(withTitle: String(localized: "Report an issue"))
+                    let response = alert.runModal()
+                    if response == .alertSecondButtonReturn {
+                        // 构建一个 issue 链接
+                        let title = "[Bug] Error when injecting \(self.appDetail?.name ?? "")"
+                        let body = """
+                        ### Error Message
+                        
+                        ```
+                        \(errorMessage)
+                        ```
+
+                        ### Info
+
+                        - Name: \(self.appDetail?.name ?? "")
+                        - Identifier: \(self.appDetail?.identifier ?? "")
+                        - \(self.appDetail?.name ?? "") Version: \(self.appDetail?.version ?? "")
+                        - Stage: \(stage.description)
+                        - InjectGUI version: \(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "")
+
+                        """
+                        let url = URL(string: "\(Constants.projectUrl)/issues/new?assignees=&labels=bug&title=\(title.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? "")&body=\(body.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? "")")!
+                        NSWorkspace.shared.open(url)
+                    }
                     self.updateInjectStage(stage: stage, message: "Error: \(errorMessage)", progress: 1, status: .error, error: InjectRunningError(error: errorMessage, stage: stage))
+                    self.isRunning = false
+                    self.emergencyStop = true
                 } else {
                     self.updateInjectStage(stage: stage, message: stage.description, progress: 1, status: .finished)
                     self.executeNextStage(stages: stages, index: index + 1)
@@ -300,7 +328,7 @@ class Injector: ObservableObject {
         case .none:
             return path.replacingOccurrences(of: "%20", with: " ")
         case .appleScript:
-            return path.replacingOccurrences(of: "%20", with: " ").replacingOccurrences(of: " ", with: "\\\\ ")
+           return path.replacingOccurrences(of: "%20", with: " ").replacingOccurrences(of: " ", with: "\\\\ ")
         case .bash:
             return path.replacingOccurrences(of: "%20", with: " ").replacingOccurrences(of: " ", with: "\\ ")
         }
@@ -313,15 +341,15 @@ class Injector: ObservableObject {
         let destination = source.appending(".backup")
 
         if !FileManager.default.fileExists(atPath: source) {
-            print("Source file not found: \(source)")
-            return [("echo Source file not found: \(source.transformTo(to: .appleScript)) && exit 1", true)] // 借用一下 AppleScript 来弹窗
+            print("[*] Source file not found: \(source)")
+            return [("echo Source file not found: \(source.transformTo(to: .bash)) && exit 1", true)] // 借用一下 AppleScript 来弹窗
         }
         if FileManager.default.fileExists(atPath: destination) {
-            print("Destination file already exists: \(destination)")
+            print("[*] Destination file already exists: \(destination)")
             return []
         }
         return [
-            ("sudo cp \(source.transformTo(to: .appleScript)) \(destination.transformTo(to: .appleScript))", true)
+            ("sudo cp \(source.transformTo(to: .bash)) \(destination.transformTo(to: .bash))", true)
         ]
     }
 
@@ -329,14 +357,14 @@ class Injector: ObservableObject {
 
     func checkPermissionAndRunCommands() -> [(command: String, isAdmin: Bool)] {
         var shells: [(command: String, isAdmin: Bool)] = []
-        let source = self.genSourcePath(for: .appleScript)
+        let source = self.genSourcePath(for: .bash)
         shells.append(("sudo xattr -cr \(source)", true))
         shells.append(("sudo chmod -R 777 \(source)", true))
 
         // 检查是否运行中, 如果运行中则杀掉进程
         let isRunning = NSRunningApplication.runningApplications(withBundleIdentifier: self.appDetail?.identifier ?? "").count > 0
         if isRunning {
-            shells.append(("sudo pkill -f \(self.genSourcePath(for: .appleScript, executable: true))", true))
+            shells.append(("sudo pkill -f \(self.genSourcePath(for: .bash, executable: true))", true))
         }
         return shells
     }
@@ -369,10 +397,13 @@ class Injector: ObservableObject {
             alert.informativeText = String(localized: "This should not happen here, please report to the developer (Area: MainInject)")
             alert.alertStyle = .warning
             alert.addButton(withTitle: String(localized: "OK"))
+            alert.runModal()
+            print("[*] Inject Tools Path Not Found.")
             return [("echo Inject Tools Path Not Found && exit 1", true)]
         }
 
         if self.injectDetail?.needCopyToAppDir == true {
+            print("[*] Copying 91Qiuchenly.dylib to app dir")
 //            let copyedQiuchenly_URL = (self.appDetail?.path ?? "") + bridgeDir + "91Qiuchenly.dylib"
             let copyedQiuchenly_URL = self.genSourcePath(for: .none, file: "91Qiuchenly.dylib")
             let softLink = ("sudo ln -f -s '\(QiuchenlyDylib_URL!)' '\(copyedQiuchenly_URL)'", true) // 为了防止原神更新后导致的插件失效，这里使用软链接
@@ -384,12 +415,12 @@ class Injector: ObservableObject {
             let componentApp = componentAppList.map { appBaseLocate + $0 }
             let componentAppExecutable = componentApp.map { $0 + "/Contents/MacOS/" + (self.readExecutableFile(app: URL(fileURLWithPath: $0)) ?? "") }
             let desireAppList = desireApp + componentAppExecutable
-            let insert_dylib_commands = desireAppList.map { "sudo \(self.genSourcePath(for: .appleScript, path: insert_dylib_URL!)) '\(copyedQiuchenly_URL)' '\(destination.transformTo(to: .none))' '\($0)'" }
+            let insert_dylib_commands = desireAppList.map { "sudo \(self.genSourcePath(for: .bash, path: insert_dylib_URL!)) '\(copyedQiuchenly_URL)' '\(destination.transformTo(to: .none))' '\($0)'" }
 
             return [softLink] + insert_dylib_commands.map { ($0, true) }
         }
 
-        return [("sudo \(self.genSourcePath(for: .appleScript, path: insert_dylib_URL!)) '\(QiuchenlyDylib_URL!)' '\(source.transformTo(to: .none))' '\(destination.transformTo(to: .none))'", true)]
+        return [("sudo \(self.genSourcePath(for: .bash, path: insert_dylib_URL!)) '\(QiuchenlyDylib_URL!)' '\(source.transformTo(to: .none))' '\(destination.transformTo(to: .none))'", true)]
     }
 
     // MARK: - 注入原神之 DeepCodeSign
@@ -409,22 +440,38 @@ class Injector: ObservableObject {
             let entitlementDownloadURL = injectConfiguration.generateInjectToolDownloadURL(name: entitlements)
             let downloadIntoTmpPath = try? FileManager.default.url(for: .itemReplacementDirectory, in: .userDomainMask, appropriateFor: URL(fileURLWithPath: "/"), create: true)
             let entitlementsPath = downloadIntoTmpPath?.appendingPathComponent(entitlements).path
-            let downloadCommand = "curl -L -o \(entitlementsPath!) \(entitlementDownloadURL!)"
-            shells.append((downloadCommand, false))
+//            let downloadCommand = "curl -L -o \(entitlementsPath!) \(entitlementDownloadURL!)"
+
+            let semaphore = DispatchSemaphore(value: 0)
+            
+            let task = URLSession.shared.downloadTask(with: entitlementDownloadURL!) { (location, response, error) in
+                if let location = location {
+                    try? FileManager.default.moveItem(at: location, to: URL(fileURLWithPath: entitlementsPath!))
+                    print("[*] Download Entitlements Success: \(entitlementDownloadURL!)")
+                } else {
+                    print("[*] Download Entitlements Failed: \(entitlementDownloadURL!)")
+                    shells.append(("echo Download Entitlements Failed: \(entitlementDownloadURL!) && exit 1", false))
+                }
+                semaphore.signal()
+            }
+
+            task.resume()
+            semaphore.wait()
+            
             sign_prefix_with_deep += " --entitlements \(entitlementsPath!)"
         }
 
-        let dest = self.genSourcePath(for: .bash)
+        let dest = self.genSourcePath(for: .none)
 
         if !(injectDetail?.noSignTarget ?? false) {
-            shells.append((sign_prefix_with_deep + " '\(dest)'", false))
+            shells.append((sign_prefix_with_deep + " '\(dest)'", true))
         }
 //        shells.append((sign_prefix_with_deep + " '\(dest)'", false))
 
         let deepSignApp = self.injectDetail?.deepSignApp // Bool
         if deepSignApp == true {
-            let deepSignAppPath = self.genSourcePath(for: .bash, path: (self.appDetail?.path ?? "").replacingOccurrences(of: "/Contents", with: ""))
-            shells.append((sign_prefix_with_deep + " '\(deepSignAppPath)'", false))
+            let deepSignAppPath = self.genSourcePath(for: .none, path: (self.appDetail?.path ?? "").replacingOccurrences(of: "/Contents", with: ""))
+            shells.append((sign_prefix_with_deep + " '\(deepSignAppPath)'", true))
         }
 
 //        let disableLibraryValidate = self.injectDetail?.dis
@@ -455,41 +502,59 @@ class Injector: ObservableObject {
             try? FileManager.default.createDirectory(at: extraShellDir, withIntermediateDirectories: true, attributes: nil)
         }
         let downloadPath = downloadIntoTmpPath.appendingPathComponent(extraShell).path
-        let downloadCommand = "curl -L -o \(downloadPath) \(getToolDownloadURL)"
+//        let downloadCommand = "curl -L -o \(downloadPath) \(getToolDownloadURL)"
+        // 创建信号量，等待下载完成
 
-        let dest = self.genSourcePath(for: .appleScript)
+        let semaphore = DispatchSemaphore(value: 0)
+
+        let task = URLSession.shared.downloadTask(with: getToolDownloadURL) { (location, response, error) in
+            if let location = location {
+                try? FileManager.default.moveItem(at: location, to: URL(fileURLWithPath: downloadPath))
+                print("[*] Download Extra Shell Success: \(getToolDownloadURL)")
+            } else {
+                print("[*] Download Extra Shell Failed: \(getToolDownloadURL)")
+                shells.append(("echo Download Extra Shell Failed: \(getToolDownloadURL) && exit 1", false))
+            }
+            semaphore.signal()
+        }
+
+        task.resume()
+        semaphore.wait()
+
+        let dest = self.genSourcePath(for: .bash)
 
         // MARK: - Sub: 对某些 shell 脚本进行内容替换
 
         var replaceSpecialShell: [(String, String)] = [] // (from, to)
 
         // tool/optool
-        let optoolPath = self.genSourcePath(for: .appleScript, path: injectConfiguration.getInjecToolPath(name: "optool")?.pathWithFallback())
+        let optoolPath = self.genSourcePath(for: .bash, path: injectConfiguration.getInjecToolPath(name: "optool")?.pathWithFallback())
         replaceSpecialShell.append(("tool/optool", optoolPath))
         replaceSpecialShell.append(("./tool/optool", optoolPath))
 
         // tool/insert_dylib
-        let insert_dylibPath = self.genSourcePath(for: .appleScript, path: injectConfiguration.getInjecToolPath(name: "insert_dylib")?.pathWithFallback())
+        let insert_dylibPath = self.genSourcePath(for: .bash, path: injectConfiguration.getInjecToolPath(name: "insert_dylib")?.pathWithFallback())
         replaceSpecialShell.append(("tool/insert_dylib", insert_dylibPath))
         replaceSpecialShell.append(("./tool/insert_dylib", insert_dylibPath))
 
         // tool/91QiuChenly.dylib
-        let dylibPath = self.genSourcePath(for: .appleScript, path: injectConfiguration.getInjecToolPath(name: "91Qiuchenly.dylib")?.pathWithFallback())
+        let dylibPath = self.genSourcePath(for: .bash, path: injectConfiguration.getInjecToolPath(name: "91Qiuchenly.dylib")?.pathWithFallback())
         replaceSpecialShell.append(("tool/91QiuChenly.dylib", dylibPath))
         replaceSpecialShell.append(("./tool/91QiuChenly.dylib", dylibPath))
 
         // tool/GenShineImpactStarter
-        let genShineImpactStarterPath = self.genSourcePath(for: .appleScript, path: injectConfiguration.getInjecToolPath(name: "GenShineImpactStarter")?.pathWithFallback())
+        let genShineImpactStarterPath = self.genSourcePath(for: .bash, path: injectConfiguration.getInjecToolPath(name: "GenShineImpactStarter")?.pathWithFallback())
         replaceSpecialShell.append(("tool/GenShineImpactStarter", genShineImpactStarterPath))
         replaceSpecialShell.append(("./tool/GenShineImpactStarter", genShineImpactStarterPath))
 
         // 把 [0] 替换为 [1] 的内容
         let replaceCommands = replaceSpecialShell.map { from, to in
-            "sed -i '' 's|\(from)|\(to)|g' \(downloadPath)"
+            "sed -i '' 's|\(from)|\"\(to)\"|g' \(downloadPath)"
         }
 
-        shells.append((downloadCommand, false))
-        shells.append(("chmod +x \(downloadPath)", false))
+        // shells.append((downloadCommand, false))
+        shells.append(("sudo chmod -R 777 \(downloadPath)", true))
+        shells.append(("chmod +x \(downloadPath)", true))
         if !replaceCommands.isEmpty {
             shells.append(contentsOf: replaceCommands.map { ($0, false) })
         }
@@ -515,7 +580,7 @@ class Injector: ObservableObject {
                     let bridgeFile = (self.appDetail?.path ?? "") + (self.getBridgeDir())
                     let insertDylibURL = self.genSourcePath(for: .bash, path: injectConfiguration.getInjecToolPath(name: "insert_dylib")?.pathWithFallback())
                     let helperName = targetHelper.split(separator: "/").last
-                    let target = self.genSourcePath(for: .appleScript, path: "/Library/LaunchDaemons/\(helperName!).plist")
+                    let target = self.genSourcePath(for: .bash, path: "/Library/LaunchDaemons/\(helperName!).plist")
 
                     var srcInfo = [(self.appDetail?.path ?? "").replacingOccurrences(of: "/Contents", with: "") + "/Contents/Info.plist"]
                     if let componentApps = self.injectDetail?.componentApp {

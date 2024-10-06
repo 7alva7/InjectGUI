@@ -88,7 +88,7 @@ class Executor: ObservableObject {
             task.arguments = ["-c", command]
             // task.arguments = ["-c", "echo 123"]
             #if DEBUG
-            print("command: \(command)")
+            print("[*] command: \(command)")
             #endif
 
             let pipe = Pipe()
@@ -134,8 +134,12 @@ class Executor: ObservableObject {
             task.standardOutput = outputPipe
             task.standardError = errorPipe
 
-            let escapedCommand = command.replacingOccurrences(of: "\"", with: "\\\"")
-            task.arguments = ["-c", "echo \(self.password) | sudo -S bash -c \"\(escapedCommand)\""]
+            let escapedCommand = command
+                .replacingOccurrences(of: "\"", with: "\\\"")
+            #if DEBUG
+            print("[*] Escaped command: \(escapedCommand)")
+            #endif
+            task.arguments = ["-c", "echo \(self.password) | base64 --decode | sudo -S bash -c \"\(escapedCommand)\""]
             task.executableURL = URL(fileURLWithPath: "/bin/bash")
 
             do {
